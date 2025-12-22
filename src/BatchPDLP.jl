@@ -32,6 +32,9 @@ module BatchPDLP
     # and uses this number to determine block sizes for all CUDA kernels
     const GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
 
+    # Export the main struct and the PDLP function itself
+    export PDLPData, PDLP
+
     include(joinpath(@__DIR__, "structs.jl"))
     include(joinpath(@__DIR__, "kernels.jl"))
     include(joinpath(@__DIR__, "main_loop.jl"))
