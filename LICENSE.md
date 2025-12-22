@@ -1,6 +1,7 @@
 MIT License
 
-Copyright (c) 2025 Process Systems and Operations Research Laboratory
+Copyright (c) 2025 Robert Gottlieb, Dimitri Alston, Matthew Stuber, and the 
+University of Connecticut (UConn)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
