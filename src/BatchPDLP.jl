@@ -25,8 +25,10 @@
 #    functions of the LPs being constructed will always be identical. 
 
 module BatchPDLP
-    # Add necessary packages
-    using CUDA
+    # Import CUDA and frequently used structs, functions, and macros
+    import CUDA
+    import CUDA: CuArray, sync_threads, unsafe_load, threadIdx, blockIdx, blockDim, gridDim
+    import CUDA: @cuda, @cuDynamicSharedMem, @cuStaticSharedMem
     
     # This constant checks to see how many streaming multiprocessors the user's GPU has,
     # and uses this number to determine block sizes for all CUDA kernels
@@ -34,6 +36,10 @@ module BatchPDLP
 
     # Export the main struct and the PDLP function itself
     export PDLPData, PDLP
+
+    # Export ways of adding constraints
+    export add_LP_objective_constraint, add_LP_constraint, add_LP_lower_bound,
+            add_best_obj_LP_constraints, add_best_cons_LP_constraints, add_multiple_LP_lower_bound
 
     include(joinpath(@__DIR__, "structs.jl"))
     include(joinpath(@__DIR__, "kernels.jl"))
