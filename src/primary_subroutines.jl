@@ -4,8 +4,31 @@ function PDLP(
     solutions::CuArray{Float64}=CuArray{Float64}(undef, PDLP_data.dims.n_LPs, PDLP_data.dims.n_vars), 
     objectives::CuArray{Float64}=CuArray{Float64}(undef, PDLP_data.dims.n_LPs),
     return_dual_obj::Bool=false,
+    return_both_obj::Bool=false,
     global_upper_bound::Float64=Inf
     )
+
+    # Check return conditions and verify that `objectives` storage is correctly sized
+    if return_dual_obj + return_both_obj == 2
+        error("Only one return condition allowed")
+    end
+
+    if !return_dual_obj && !return_both_obj
+        return_code = Int32(1)
+        if size(objectives, 2) != 1
+            error("Objective storage sized incorrectly")
+        end
+    elseif return_dual_obj
+        return_code = Int32(2)
+        if size(objectives, 2) != 1
+            error("Objective storage sized incorrectly")
+        end
+    elseif return_both_obj
+        return_code = Int32(3)
+        if size(objectives, 2) != 2
+            error("Objective storage sized incorrectly")
+        end
+    end
 
     # Validate the LP data we've been given to make sure the numbers are all valid and the dimensions
     # of participating matrices are correct
@@ -117,7 +140,7 @@ function PDLP(
             PDLP_data.parameters.termination_criteria.eps_optimal_relative,
             PDLP_data.parameters.termination_criteria.eps_primal_infeasible,
             PDLP_data.parameters.termination_criteria.eps_dual_infeasible,
-            return_dual_obj,
+            return_code,
             global_upper_bound,
             PDLP_data.parameters.skip_hard_problems,
             PDLP_data.global_counter,
