@@ -3,6 +3,7 @@ function PDLP(
     PDLP_data::PDLPData; 
     solutions::CuArray{Float64}=CuArray{Float64}(undef, PDLP_data.dims.n_LPs, PDLP_data.dims.n_vars), 
     objectives::CuArray{Float64}=CuArray{Float64}(undef, PDLP_data.dims.n_LPs),
+    return_dual_obj::Bool=false,
     global_upper_bound::Float64=Inf
     )
 
@@ -116,6 +117,7 @@ function PDLP(
             PDLP_data.parameters.termination_criteria.eps_optimal_relative,
             PDLP_data.parameters.termination_criteria.eps_primal_infeasible,
             PDLP_data.parameters.termination_criteria.eps_dual_infeasible,
+            return_dual_obj,
             global_upper_bound,
             PDLP_data.parameters.skip_hard_problems,
             PDLP_data.global_counter,

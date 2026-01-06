@@ -71,6 +71,7 @@ function main_loop_kernel(
     rel_tol,                          # Relative tolerance for termination
     eps_primal_infeasible,            # Primal infeasibility tolerance
     eps_dual_infeasible,              # Dual infeasibility tolerance
+    return_dual_obj,                  # Flag to return the dual objective value instead of the primal objective value
     global_upper_bound,               # Information about the B&B upper bound (PDLP terminates if a dual feasible solution is above this value)
     skip_hard_problems,               # Flag to skip problems with too many iterations
     global_counter,                   # Count of LPs being solved
@@ -603,7 +604,11 @@ function main_loop_kernel(
                     end
                     idx = threadIdx().x
                     if idx==1
-                        objectives[LP] = CI_dual_objective
+                        if return_dual_obj
+                            objectives[LP] = CI_dual_objective
+                        else
+                            objectives[LP] = CI_primal_objective
+                        end
                         iterations[LP] = iteration
                         CUDA.atomic_add!(CUDA.pointer(global_counter, 1), Int32(1))
                         CUDA.atomic_add!(CUDA.pointer(iteration_counter, 1), Int32(iteration))
@@ -648,6 +653,9 @@ function main_loop_kernel(
                     end
                     idx = threadIdx().x
                     if idx==1
+                        # Special case: This checks for a feasible dual objective value
+                        # above the global upper bound in a B&B algorithm. We don't necessarily
+                        # care about the primal objective here.
                         objectives[LP] = CI_dual_objective
                         iterations[LP] = iteration
                         CUDA.atomic_add!(CUDA.pointer(global_counter, 1), Int32(1))
