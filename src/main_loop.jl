@@ -550,6 +550,21 @@ function main_loop_kernel(
                         end
                     end
 
+                    # Check iteration limit
+                    if iteration >= iteration_limit
+                        termination_reason[LP] = TERMINATION_REASON_ITERATION_LIMIT
+                    end
+
+                    # Check KKT matrix pass limit
+                    if cumulative_kkt_passes >= kkt_matrix_pass_limit
+                        termination_reason[LP] = TERMINATION_REASON_KKT_MATRIX_PASS_LIMIT
+                    end
+
+                    # Check for numerical errors
+                    if numerical_error[1]
+                        termination_reason[LP] = TERMINATION_REASON_NUMERICAL_ERROR
+                    end
+
                     # Check if we're within the tolerances for primal and dual infeasibility, and that there's
                     # a sufficiently small gap between the primal and dual objective values.
                     if (CI_l2_dual_residual < abs_tol + rel_tol*cache_l2_norm_primal_linear_objective) &&
@@ -570,21 +585,6 @@ function main_loop_kernel(
                         ((II_max_primal_ray_infeasibility / (-II_primal_ray_linear_objective)) <= eps_dual_infeasible) &&
                         (iteration >= 10)
                         termination_reason[LP] = TERMINATION_REASON_DUAL_INFEASIBLE
-                    end
-
-                    # Check iteration limit
-                    if iteration >= iteration_limit
-                        termination_reason[LP] = TERMINATION_REASON_ITERATION_LIMIT
-                    end
-
-                    # Check KKT matrix pass limit
-                    if cumulative_kkt_passes >= kkt_matrix_pass_limit
-                        termination_reason[LP] = TERMINATION_REASON_KKT_MATRIX_PASS_LIMIT
-                    end
-
-                    # Check for numerical errors
-                    if numerical_error[1]
-                        termination_reason[LP] = TERMINATION_REASON_NUMERICAL_ERROR
                     end
                 end
 
