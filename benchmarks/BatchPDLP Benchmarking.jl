@@ -163,6 +163,9 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
         CUDA.@sync example.eq_cons[i](eq_result_storage[i], [input_storage[j] for j=1:example.nvars]...)
     end
 
+    # Feed in data to the PDLPData struct
+    PDLP_data = PDLPData(n_LPs, example.nvars+1, 1+n_cuts*cut_height, sparsity=sparsity, iteration_limit=1000000)
+    
     # Since the PDLP_GPU struct already has an allocated field for PDLP data, we
     # only need to update that field with the new LP to solve. The main PDLP
     # algorithm already resets all fields except for the original LP, so to prepare
@@ -320,9 +323,6 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
     PDLP_95pct_2xGPU_iterations_array = zeros(Int64, n_LPs)
 
     # Run BatchPDLP with 2xGPU if selected
-    
-    # Feed in data to the PDLPData struct
-    PDLP_data = PDLPData(n_LPs, example.nvars+1, 1+n_cuts*cut_height, sparsity=sparsity, iteration_limit=1000000)
     if run_2xGPU
         # Make two more PDLPData structs for the 2-GPU setup
         device!(0)
