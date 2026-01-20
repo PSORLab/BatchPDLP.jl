@@ -110,7 +110,7 @@ A BibTeX entry is given below:
   author    = {Robert X. Gottlieb, Dimitri Alston, and Matthew D. Stuber},
   journal   = {Under Review},
   title     = {Re-Architected PDLP for Batch Parallelization of Linear Programs},
-  year      = {2025},
+  year      = {2026},
   pages     = {},
   doi       = {},
   eprint    = {},

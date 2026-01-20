@@ -60,10 +60,10 @@ function case_generator(lbd, ubd, n, m)
     return all_lvbs, all_uvbs
 end
 
-# Now, given a problem, I want to create the right objects to calculate
-# relaxations, create the optimization problems, and pass them to PDLP
+
+# Given a problem, create the optimization problems and pass them to PDLP
 # and other comparison solvers (GLPK, Gurobi, HiGHS)
-function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::Bool=true, run_Gurobi::Bool=true, run_HiGHS::Bool=true, run_2xGPU::Bool=false)
+function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_BatchPDLP::Bool=true, run_GLPK::Vector{Bool}=fill(true, 3), run_Gurobi::Vector{Bool}=fill(true, 4), run_HiGHS::Vector{Bool}=fill(true, 4), run_2xGPU::Bool=false)
     ##############################################################################
     ######### Step 1) Get Bounds        
     ##############################################################################
@@ -165,7 +165,7 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
 
     # Feed in data to the PDLPData struct
     PDLP_data = PDLPData(n_LPs, example.nvars+1, 1+n_cuts*cut_height, sparsity=sparsity, iteration_limit=1000000)
-    
+
     # Since the PDLP_GPU struct already has an allocated field for PDLP data, we
     # only need to update that field with the new LP to solve. The main PDLP
     # algorithm already resets all fields except for the original LP, so to prepare
@@ -237,14 +237,15 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
     PDLP_lowres_objectives = CUDA.zeros(Float64, n_LPs, 2)
 
     # Solve the problems once for compilation
-    try
-        PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, return_both_obj=true)
-    catch
-        nothing
+    if run_BatchPDLP
+        try
+            PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, return_both_obj=true)
+        catch
+            nothing
+        end
     end
 
     # Solve the problem once at higher tolerances (default is 1E-8 for abs,rel,primal/dual infeas)
-    println("Starting BatchPDLP")
     GC.gc()
     GC.enable(false) # Disable garbage collection temporarily to not impact results
 
@@ -255,19 +256,22 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
 
     # Solve for the first time, but only do (at least) 95% of problems 
     # (then reset and run all the problems as normal)
-    iterations = Array(PDLP_data.iterations)
-    stop_here = 0
-    for i in sort(unique(iterations))
-        if count(iterations .<= i) >= 0.95*n_LPs
-            stop_here = i
-            break
+    if run_BatchPDLP
+        println("Starting BatchPDLP")
+        iterations = Array(PDLP_data.iterations)
+        stop_here = 0
+        for i in sort(unique(iterations))
+            if count(iterations .<= i) >= 0.95*n_LPs
+                stop_here = i
+                break
+            end
         end
-    end
-    PDLP_data.parameters.iteration_limit = Int32(stop_here)
-    try
-        PDLP_95pct_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, return_both_obj=true)
-    catch
-        PDLP_95pct_solving_time[1] = NaN
+        PDLP_data.parameters.iteration_limit = Int32(stop_here)
+        try
+            PDLP_95pct_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, return_both_obj=true)
+        catch
+            PDLP_95pct_solving_time[1] = NaN
+        end
     end
 
     # Save objectives and termination status
@@ -281,10 +285,12 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
     PDLP_data.parameters.iteration_limit = Int32(1000000)
 
     # Run PDLP with an iteration limit of 1E6 and tolerances of 1E-8
-    try
-        PDLP_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, return_both_obj=true)
-    catch
-        PDLP_solving_time[1] = NaN
+    if run_BatchPDLP
+        try
+            PDLP_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, return_both_obj=true)
+        catch
+            PDLP_solving_time[1] = NaN
+        end
     end
 
     # Save objectives and termination statuses as CPU arrays
@@ -300,10 +306,12 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
     PDLP_data.parameters.termination_criteria.eps_dual_infeasible  = 1E-8
 
     # Solve again with lower tolerances
-    try
-        PDLP_lowres_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_lowres_solutions, objectives=PDLP_lowres_objectives, return_both_obj=true)
-    catch
-        PDLP_lowres_solving_time[1] = NaN
+    if run_BatchPDLP
+        try
+            PDLP_lowres_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_lowres_solutions, objectives=PDLP_lowres_objectives, return_both_obj=true)
+        catch
+            PDLP_lowres_solving_time[1] = NaN
+        end
     end
 
     # Initialize 2xGPU fields
@@ -477,17 +485,19 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
     GC.gc()
 
     # Print out some PDLP solve times
-    println("BatchPDLP Solve Times:")
-    println("============================================================")
-    println("All problems (high-res):     | $(round.(PDLP_solving_time[1], digits=6))")
-    println("All problems (low-res):      | $(round.(PDLP_lowres_solving_time[1], digits=6))")
-    println(">95% of problems (high-res): | $(round.(PDLP_95pct_solving_time[1], digits=6))")
-    println("===========================================================")
-    if run_2xGPU
-        println("All problems (high-res) (2xGPU):     | $(round.(PDLP_2xGPU_solving_time[1], digits=6))")
-        println("All problems (low-res) (2xGPU):      | $(round.(PDLP_lowres_2xGPU_solving_time[1], digits=6))")
-        println(">95% of problems (high-res) (2xGPU): | $(round.(PDLP_95pct_2xGPU_solving_time[1], digits=6))")
+    if run_BatchPDLP
+        println("BatchPDLP Solve Times:")
+        println("============================================================")
+        println("All problems (high-res):     | $(round.(PDLP_solving_time[1], digits=6))")
+        println("All problems (low-res):      | $(round.(PDLP_lowres_solving_time[1], digits=6))")
+        println(">95% of problems (high-res): | $(round.(PDLP_95pct_solving_time[1], digits=6))")
         println("===========================================================")
+        if run_2xGPU
+            println("All problems (high-res) (2xGPU):     | $(round.(PDLP_2xGPU_solving_time[1], digits=6))")
+            println("All problems (low-res) (2xGPU):      | $(round.(PDLP_lowres_2xGPU_solving_time[1], digits=6))")
+            println(">95% of problems (high-res) (2xGPU): | $(round.(PDLP_95pct_2xGPU_solving_time[1], digits=6))")
+            println("===========================================================")
+        end
     end
 
     # Save constraints and the RHS for CPU solvers
@@ -613,17 +623,17 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
 
     # Compile solvers
     for i in eachindex(solver_list)
-        if !run_GLPK && i <= 3
-            solving_times[:,i] .= NaN
-            primal_objectives[i,:] .= NaN
-            dual_objectives[i,:] .= NaN
-            continue
-        elseif ~run_Gurobi && (i >= 4 && i <= 8)
-            solving_times[:,i] .= NaN
-            primal_objectives[i,:] .= NaN
-            dual_objectives[i,:] .= NaN
-            continue
-        elseif ~run_HiGHS && (i >= 9 && i <= 12)
+        if (i==1 && !(run_GLPK[1])) ||
+            (i==2 && !(run_GLPK[2])) ||
+            (i==3 && !(run_GLPK[3])) ||
+            (i==4 && !(run_Gurobi[1])) ||
+            (i==5 && !(run_Gurobi[2])) ||
+            (i==6 && !(run_Gurobi[3])) ||
+            (i==7 && !(run_Gurobi[4])) ||
+            (i==8 && !(run_HiGHS[1])) ||
+            (i==9 && !(run_HiGHS[2])) ||
+            (i==10 && !(run_HiGHS[3])) ||
+            (i==11 && !(run_HiGHS[4]))
             solving_times[:,i] .= NaN
             primal_objectives[i,:] .= NaN
             dual_objectives[i,:] .= NaN
@@ -655,22 +665,31 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
     end
 
     # Now solve all the LPs
+    first = [findfirst(run_GLPK), findfirst(run_Gurobi), findfirst(run_HiGHS)]
+    last = [findlast(run_GLPK), findlast(run_Gurobi), findlast(run_HiGHS)]
     for solver = eachindex(solver_list)
-        if !run_GLPK && solver <= 3
-            continue
-        elseif ~run_Gurobi && (solver >= 4 && solver <= 7)
-            continue
-        elseif ~run_HiGHS && (solver >= 8 && solver <= 11)
+        if !isnothing(first[1]) && solver==first[1]
+            println("Starting GLPK")
+        elseif !isnothing(first[2]) && solver==3+first[2]
+            println("Starting Gurobi")
+        elseif !isnothing(first[3]) && solver==7+first[3]
+            println("Starting HiGHS")
+        end
+
+        if (solver==1 && !(run_GLPK[1])) ||
+            (solver==2 && !(run_GLPK[2])) ||
+            (solver==3 && !(run_GLPK[3])) ||
+            (solver==4 && !(run_Gurobi[1])) ||
+            (solver==5 && !(run_Gurobi[2])) ||
+            (solver==6 && !(run_Gurobi[3])) ||
+            (solver==7 && !(run_Gurobi[4])) ||
+            (solver==8 && !(run_HiGHS[1])) ||
+            (solver==9 && !(run_HiGHS[2])) ||
+            (solver==10 && !(run_HiGHS[3])) ||
+            (solver==11 && !(run_HiGHS[4]))
             continue
         end
         current_solver = solver_list[solver]
-        if solver==1
-            println("Starting GLPK")
-        elseif solver==4
-            println("Starting Gurobi")
-        elseif solver==8
-            println("Starting HiGHS")
-        end
         for i = 1:n_LPs
             try
                 # Empty the solver of previous run information
@@ -727,14 +746,14 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
                 dual_objectives[i, solver] = NaN
             end
         end
-        if solver==3
+        if !isnothing(last[1]) && solver==last[1]
             println("GLPK Solve Times:")
             println("============================================================")
             println("Primal Simplex: | $(round(sum(solving_times[:,1]), digits=6))")
             println("Dual Simplex:   | $(round(sum(solving_times[:,2]), digits=6))")
             println("Interior Point: | $(round(sum(solving_times[:,3]), digits=6))")
             println("===========================================================")
-        elseif solver==7
+        elseif !isnothing(last[2]) && solver==3+last[2]
             println("Gurobi Solve Times:")
             println("============================================================")
             println("Primal Simplex: | $(round(sum(solving_times[:,4]), digits=6))")
@@ -742,7 +761,7 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_GLPK::
             println("Interior Point: | $(round(sum(solving_times[:,6]), digits=6))")
             println("PDLP:           | $(round(sum(solving_times[:,7]), digits=6))")
             println("===========================================================")
-        elseif solver==11
+        elseif !isnothing(last[3]) && solver==7+last[3]
             println("HiGHS Solve Times:")
             println("============================================================")
             println("Primal Simplex: | $(round(sum(solving_times[:,8]), digits=6))")
@@ -860,7 +879,17 @@ for i = 1:size(included, 1)
     
     # Load and run the problem
     ex = LoadedProblem(eval(Symbol(included[i,1])))
-    data = run_example(ex, 10000, 3, run_2xGPU=true)
+    if i==33
+        data = run_example(ex, 10000, 3, run_2xGPU=true, run_GLPK=[false, true, true], run_HiGHS=[true, true, false, true]) # least, GLPK Primal Simplex crashes VSCode, HiGHS IPM takes >1hr
+    elseif i==59
+        data = run_example(ex, 10000, 3, run_2xGPU=true, run_GLPK=[false, true, true]) # ex7_3_2, GLPK Primal Simplex crashes VSCode
+    elseif i==71
+        data = run_example(ex, 10000, 3, run_2xGPU=true, run_HiGHS=[true, true, false, true]) # mathopt3, HiGHS IPM takes >overnight
+    elseif i==102
+        data = run_example(ex, 10000, 3, run_2xGPU=true, run_GLPK=[true, true, false]) # maxmin, GLPK IPM crashes Julia
+    else
+        data = run_example(ex, 10000, 3, run_2xGPU=true)
+    end
 
     # Write data to a CSV
     open("./benchmarking_results/rundata_$(included[i,1]).csv", "w") do io

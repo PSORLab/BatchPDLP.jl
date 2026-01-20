@@ -33,6 +33,7 @@ module BatchPDLP
     # This constant checks to see how many streaming multiprocessors the user's GPU has,
     # and uses this number to determine block sizes for all CUDA kernels
     const GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
+    export GPU_blocks
 
     # Export the main struct and the PDLP function itself
     export PDLPData, PDLP

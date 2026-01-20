@@ -194,43 +194,39 @@ end
 # This kernel recognizes that `n_points` relaxations exist for each LP, and
 # then selects only the first point to source lower bound information, since
 # the information should be the same for every evaluation within one LP.
-# DEPRECATION WARNING: This function is outdated and does not change the `active_constraint`
-#                      field. This field alerts the main PDLP kernel that the constraint is
-#                      in use. If `active_constraint` is not adjusted, the constraint will be
-#                      ignored.
-# function add_multiple_LP_lower_bound_kernel(
-#     constraint_matrix,
-#     right_hand_side,
-#     obj_result,
-#     n_LPs::Int32,
-#     LP_stride::Int32,
-#     index::Int32,
-#     active_constraint,
-#     n_points::Int32
-#     )
+function add_multiple_LP_lower_bound_kernel(
+    constraint_matrix,
+    right_hand_side,
+    obj_result,
+    n_LPs::Int32,
+    LP_stride::Int32,
+    index::Int32,
+    active_constraint,
+    n_points::Int32
+    )
 
-#     # Given the objective result, which contains [cv, cc, lo, hi, [subgradients...]],
-#     # pull out the lower bound result and apply it as a constraint on the epigraph variable
-#     idx = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
-#     stride = blockDim().x * gridDim().x
+    # Given the objective result, which contains [cv, cc, lo, hi, [subgradients...]],
+    # pull out the lower bound result and apply it as a constraint on the epigraph variable
+    idx = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
+    stride = blockDim().x * gridDim().x
 
-#     # Each thread is assigned one constraint line to add (i.e., one LP)
-#     while idx <= n_LPs
-#         # Add the epigraph variable as the only element in that row of the constraint
-#         constraint_matrix[index + LP_stride*(idx - Int32(1)), Int32(1)] = 1.0
+    # Each thread is assigned one constraint line to add (i.e., one LP)
+    while idx <= n_LPs
+        # Add the epigraph variable as the only element in that row of the constraint
+        constraint_matrix[index + LP_stride*(idx - Int32(1)), Int32(1)] = 1.0
 
-#         # The right-hand side value is simply the lower bound from obj_result, since
-#         # the structure is `constraint_matrix * x >= right_hand_side`. Since we have
-#         # n_points per LP, take only the bound from the first of the points
-#         right_hand_side[index + LP_stride*(idx - Int32(1))] = obj_result[Int32((idx - Int32(1))*n_points) + Int32(1), 3]
+        # The right-hand side value is simply the lower bound from obj_result, since
+        # the structure is `constraint_matrix * x >= right_hand_side`. Since we have
+        # n_points per LP, take only the bound from the first of the points
+        right_hand_side[index + LP_stride*(idx - Int32(1))] = obj_result[Int32((idx - Int32(1))*n_points) + Int32(1), 3]
 
-#         # Set the active_constraint row to true
-#         active_constraint[index + LP_stride*(idx - Int32(1))] = true
+        # Set the active_constraint row to true
+        active_constraint[index + LP_stride*(idx - Int32(1))] = true
 
-#         idx += stride
-#     end
-#     return nothing
-# end
+        idx += stride
+    end
+    return nothing
+end
 
 # This kernel scans through `n_points` relaxations for each LP to identify the "best"
 # constraint, before adding it as a constraint in the LP. It does this process

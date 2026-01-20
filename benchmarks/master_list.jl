@@ -82,9 +82,9 @@ original_included = [
  "ex8_1_1"                  1     1;
  "trig"                     1     1;
  "ex4_1_5"                  2     0;
- "ex8_1_3"                  2     0; # Note: Solvers disagree on solutions
- "ex8_1_4"                  2     0; # Note: Solvers disagree on solutions
- "ex8_1_5"                  2     0; # Note: Solvers disagree on solutions (lots of "large complementary slackness residual" warnings)
+ "ex8_1_3"                  2     0;
+ "ex8_1_4"                  2     0;
+ "ex8_1_5"                  2     0;
  "ex8_1_6"                  2     0;
  "kriging_peaks_red010"     2     0;
  "kriging_peaks_red020"     2     0; # Exclude: Objective length is 9578
@@ -102,7 +102,7 @@ original_included = [
  "st_e19"                   2     2;
  "trigx"                    2     2;
  "mathopt2"                 2     4;
- "least"                    3     0; # Run separately: Crashes Julia when run
+ "least"                    3     0; # Special case: GLPK Primal Simplex crashes VSCode, HiGHS IPM takes >1hr
  "ex6_2_6"                  3     1;
  "ex6_2_8"                  3     1;
  "ex6_2_11"                 3     1;
@@ -128,7 +128,7 @@ original_included = [
  "ex14_2_8"                 4     5;
  "ex14_2_9"                 4     5;
  "ex7_3_1"                  4     7;
- "ex7_3_2"                  4     7; # Run separately: Crashes Julia when run
+ "ex7_3_2"                  4     7; # Special case: GLPK Primal Simplex crashes VScode
  "mhw4d"                    5     3;
  "ex8_5_3"                  5     4; # Exclude: This gets NaN constraints
  "ex8_5_4"                  5     4; # Exclude: This gets NaN constraints
@@ -144,10 +144,10 @@ original_included = [
  "ex8_5_2"                  6     4; # Exclude: This gets NaN constraints
  "ex8_5_6"                  6     4; # Exclude: This gets NaN constraints
  "ex7_2_2"                  6     5;
- "ex14_1_5"                 6     6; # Run separately: Crashes Julia when run
+ "ex14_1_5"                 6     6;
  "st_e21"                   6     6;
  "wallfix"                  6     6; # Exclude: This gets NaN constraints
- "mathopt3"                 6     7; # Run separately: Crashes Julia when run
+ "mathopt3"                 6     7; # Special case: HiGHS IPM takes >overnight
  "ex14_1_2"                 6     9;
  "ex14_2_3"                 6     9;
  "ex14_2_7"                 6     9;
@@ -163,7 +163,7 @@ original_included = [
  "process"                 10     7;
  "st_e03"                  10     7;
  "alkylation"              10    11;
- "ex14_1_7"                10    17; # Run separately: Crashes Julia when run
+ "ex14_1_7"                10    17; # Note: Warnings in GLPK; basis matrix ill-condidioned or singular
  "shiporig"                10    17; # Exclude: This gets NaN constraints
  "chem"                    11     4;
  "ann_fermentation_exp"    12     9; # Exclude: This gets NaN constraints
@@ -182,7 +182,7 @@ original_included = [
  "orth_d3m6"               25    62;
  "kriging_peaks_full010"   26    24;
  "ex5_4_4"                 27    19;
- "maxmin"                  27    78; # Run separately: Crashes Julia when run
+ "maxmin"                  27    78; # Special case: GLPK IPM crashes Julia
  "hhfair"                  29    25; # Exclude: This gets NaN constraints
  "ex8_6_2"                 30     0;
  "ramsey"                  33    22;
@@ -243,16 +243,15 @@ original_included = [
 
 exclude_list = ["kriging_peaks_red020", "kriging_peaks_red030", "kriging_peaks_red050", 
                 "kriging_peaks_red100", "kriging_peaks_red200", "kriging_peaks_red500", 
-                "least", "ex7_3_2", "ex8_5_3", "ex8_5_4", "ex8_5_5", "ex8_5_1", "ex8_5_2", 
-                "ex8_5_6", "ex14_1_5", "wallfix", "mathopt3", "like", "ex14_1_7", "shiporig", 
-                "ann_fermentation_exp", "ex8_4_5", "maxmin", "hhfair", "minlphi", 
-                "elec25", "ex8_6_1", "korcns", "polygon50", "chain50", "otpop", 
-                "kriging_peaks_full050", "ex8_3_13", "kall_ellipsoids_tc02b", 
-                "ex8_3_7", "btest14", "elec50", "hybriddynamic_varcc", 
-                "kall_ellipsoids_tc03c", "chain100", "kriging_peaks_full100", "infeas1", 
-                "camcns", "elec100", "rocket50", "cesam2log", "gancns", "chain200", 
-                "kriging_peaks_full200", "kall_ellipsoids_tc05a", "steenbrf", "arki0019", 
-                "elec200", "rocket100", "glider50", "ann_cumene_exp", "chain400"]
+                "ex8_5_3", "ex8_5_4", "ex8_5_5", "ex8_5_1", "ex8_5_2", "ex8_5_6",
+                "wallfix", "like", "shiporig", "ann_fermentation_exp", "ex8_4_5", "hhfair", 
+                "minlphi", "elec25", "ex8_6_1", "korcns", "polygon50", "chain50", "otpop", 
+                "kriging_peaks_full050", "ex8_3_13", "kall_ellipsoids_tc02b", "ex8_3_7", 
+                "btest14", "elec50", "hybriddynamic_varcc", "kall_ellipsoids_tc03c", 
+                "chain100", "kriging_peaks_full100", "infeas1", "camcns", "elec100", 
+                "rocket50", "cesam2log", "gancns", "chain200", "kriging_peaks_full200", 
+                "kall_ellipsoids_tc05a", "steenbrf", "arki0019", "elec200", "rocket100", 
+                "glider50", "ann_cumene_exp", "chain400"]
 
 included = original_included[(!).(in.(original_included[:,1], Ref(exclude_list))),:]
 
@@ -263,4 +262,3 @@ for i in included[:,1]
         println("$i failed")
     end
 end
-
