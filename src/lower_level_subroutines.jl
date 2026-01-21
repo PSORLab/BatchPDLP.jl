@@ -9,6 +9,9 @@ function ruiz_rescaling(
     dims::PDLPDims,
     )
 
+    # Identify the number of blocks to use
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
+
     # Set up temporary variables for intermediate scaling results
     temp_variable_rescaling = CuArray{Float64}(undef, size(variable_rescaling))
     temp_constraint_rescaling = CuArray{Float64}(undef, size(constraint_rescaling))
@@ -57,6 +60,9 @@ function pock_chambolle_rescaling(
     dims::PDLPDims,
     )
 
+    # Identify the number of blocks to use
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
+
     # Preallocate space for intermediate rescaling terms
     temp_variable_rescaling = CuArray{Float64}(undef, size(variable_rescaling))
     temp_constraint_rescaling = CuArray{Float64}(undef, size(constraint_rescaling))
@@ -102,6 +108,9 @@ function scale_problem(
     dims::PDLPDims,
     )
 
+    # Identify the number of blocks to use
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
+
     # Perform the following steps:
     # 1) problem.objective_vector = problem.objective_vector ./ variable_rescaling
     # 2) problem.variable_lower_bound = problem.variable_lower_bound .* variable_rescaling
@@ -140,6 +149,7 @@ function select_initial_primal_weight(
     # Theoretically the primal importance can change, but the default in the MOI_wrapper
     # is to set it to 1.0. The other parameters are un-settable in cuPDLP but theoretically
     # could be changed as well
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
     CUDA.@sync @cuda blocks=GPU_blocks threads=512 primal_weight_kernel(
         primal_weight, 
         problem.objective_vector, 
@@ -152,6 +162,7 @@ function select_initial_primal_weight(
 end
 
 function update_step_size(problem::LinearProgramSet, step_size::CuArray{Float64}, dims::PDLPDims)
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
     CUDA.@sync @cuda blocks=GPU_blocks threads=512 group_max_kernel(
         step_size, 
         problem.constraint_matrix, 
@@ -177,6 +188,9 @@ function add_LP_objective_constraint(
     active_constraint::CuArray{Bool},
     dims::PDLPDims
     )
+    
+    # Identify the number of blocks to use
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
 
     # Add the constraint
     CUDA.@sync @cuda blocks=GPU_blocks threads=256 add_LP_constraint_kernel(
@@ -210,6 +224,9 @@ function add_LP_constraint(
     dims::PDLPDims;
     geq::Bool=true
     )
+    
+    # Identify the number of blocks to use
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
 
     # Add the constraint
     CUDA.@sync @cuda blocks=GPU_blocks threads=256 add_LP_constraint_kernel(
@@ -240,6 +257,9 @@ function add_LP_lower_bound(
     active_constraint::CuArray{Bool},
     dims::PDLPDims
     )
+    
+    # Identify the number of blocks to use
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
 
     # Add the constraint
     CUDA.@sync @cuda blocks=GPU_blocks threads=256 add_LP_lower_bound_kernel(
@@ -351,6 +371,9 @@ function add_best_obj_LP_constraints(
     n_points::Int32,
     num_linearizations::Int,
     )
+    
+    # Identify the number of blocks to use
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
 
     # Add the best constraint, based on the comparison vector, num_linearizations times
     CUDA.@sync @cuda blocks=GPU_blocks threads=256 add_best_obj_LP_constraints_kernel(
@@ -393,6 +416,9 @@ function add_best_cons_LP_constraints(
     num_linearizations::Int;
     geq::Bool=true,
     )
+    
+    # Identify the number of blocks to use
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
 
     # Add the best constraint, based on the comparison vector, num_linearizations times
     CUDA.@sync @cuda blocks=GPU_blocks threads=256 add_best_cons_LP_constraints_kernel(
@@ -431,6 +457,9 @@ function add_multiple_LP_lower_bound(
     active_constraint::CuArray{Bool},
     n_points::Int32,
     )
+    
+    # Identify the number of blocks to use
+    GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
 
     # Add the constraint
     CUDA.@sync @cuda blocks=GPU_blocks threads=256 add_multiple_LP_lower_bound_kernel(
