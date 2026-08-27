@@ -1,5 +1,4 @@
-
-function main_loop_kernel(
+function main_loop_original_kernel(
     solutions,                        # Holds solutions to LPs
     objectives,                       # Holds dual objectives
     original_variable_lower_bounds,   # Used for getting unscaled convergence info
@@ -1203,221 +1202,234 @@ function main_loop_kernel(
             local_primal_weight = unsafe_load(CUDA.pointer(primal_weight, 1))
             local_step_size = unsafe_load(CUDA.pointer(step_size, 1))
 
-            step = Int32(1)
-            while step <= n_steps
-                # Prepare a `done` flag for this particular step
-                done = false
-                iter = 0
-                
-                while !done
-                    iter += 1
-                    if iter > 100000 # Prevent an endless loop if no progress is made finding a step size
-                        if idx==1 
-                            numerical_error[1] = true
-                        end
-                        break
-                    end
-                    # Store the current step size locally in each thread
-                    sync_threads()
-                    local_step_size = unsafe_load(CUDA.pointer(step_size, 1))
+            step = Int32(0)
+            while step < n_steps
 
-                    # Step 1) Add one to the total iterations tracker and cumulative kkt passes
-                    step_iterations += Int32(1)
-                    if idx==1
-                        cumulative_kkt_passes += Int32(1)
-                    end
+                #idx==1 && CUDA.@cuprintln("Reached 4: just got into inner loop where epoch is $(epoch_iterations)")
+                ITERATION_COUNT += 1    
+                # idx==1 && CUDA.@cuprintln(">>>>>>>>>>>>ITERATION $ITERATION_COUNT HAS BEGUN<<<<<<<<<<<<<<<< \n")
+
+                # idx==1 && CUDA.@cuprintln("\nINITIAL VALUES")
+                # idx==1 && CUDA.@cuprintln("Initial primal solution: [$(initial_primal_solution[1,1]), $(initial_primal_solution[1,2])]")
+                # idx==1 && CUDA.@cuprintln("Current primal solution: [$(current_primal_solution[1,1]), $(current_primal_solution[1,2])]")
+                # idx==1 && CUDA.@cuprintln("Current primal product: [$(current_primal_product[1]), $(current_primal_product[2]), $(current_primal_product[3]), $(current_primal_product[4]), $(current_primal_product[5]), $(current_primal_product[6])]")
+                # idx==1 && CUDA.@cuprintln("current_dual_product: [$(current_dual_product[1,1]), $(current_dual_product[1,2])]")
+                # idx==1 && CUDA.@cuprintln("Current dual solution: [$(current_dual_solution[1]), $(current_dual_solution[2]), $(current_dual_solution[3]), $(current_dual_solution[4]), $(current_dual_solution[5]), $(current_dual_solution[6])]\n")
+                # idx==1 && CUDA.@cuprintln("Initial dual solution: [$(initial_dual_solution[1]), $(initial_dual_solution[2]), $(initial_dual_solution[3]), $(initial_dual_solution[4]), $(initial_dual_solution[5]), $(initial_dual_solution[6])]\n")
+
+
+                # idx==1 && CUDA.@cuprintln("PARAMETER VALUES")
+                local_primal_weight = unsafe_load(CUDA.pointer(primal_weight, 1))
+
+                #TODO: remove later
+                # if ITERATION_COUNT == 4
+                #     local_primal_weight = 8.543563
+                # end
+                local_step_size = unsafe_load(CUDA.pointer(step_size, 1))
+
+                # idx==1 && CUDA.@cuprintln("Primal Weight = $(local_primal_weight) \n")
+                # idx==1 && CUDA.@cuprintln("Step Size = $(local_step_size) \n")
+                
+                # Step 1) Add one to the total iterations tracker and cumulative kkt passes
+                
+                if idx==1
+                    cumulative_kkt_passes += Int32(1)
+                end
                     
-                    # Step 2) Operate on matrices to:
-                    # A) Update delta primal
-                    # B) Calculate the norm of delta primal
+                # Step 2) Loop over nonzeros to update current_dual_product: 
+                while idx <= current_LP_length
+                    shared_space[idx] = 0.0
+                    idx += block_stride
+                end
+                idx = threadIdx().x
+                sync_threads()
+
+                while idx <= nz_count
+                    if active_constraint[active_row + nz_rows[idx]]
+                        CUDA.atomic_add!(CUDA.pointer(shared_space, nz_cols[idx]), scaled_constraint_matrix[active_row + nz_rows[idx], nz_cols[idx]] * current_dual_solution[active_row + nz_rows[idx]])
+                    end
+                    idx += block_stride
+                end
+                idx = threadIdx().x
+                sync_threads()
+                while idx <= n_vars
+                    current_dual_product[LP, idx] = shared_space[idx]
+                    idx += block_stride
+                end
+                idx = threadIdx().x
+
+                # Step 3) Calculate the next primal solution information
+                weight = ((inner_iterations + 1)/ (inner_iterations + 2))
+                while idx <= n_vars
+                    temp = current_primal_solution[LP, idx] - (local_step_size/local_primal_weight) * (scaled_objective_vector[LP, idx] - current_dual_product[LP, idx])
+                    pdhg_primal_solution[LP, idx] = max(scaled_variable_lower_bounds[LP, idx], min(scaled_variable_upper_bounds[LP, idx], temp))
+                    dual_slack[LP, idx] = (pdhg_primal_solution[LP, idx] - temp) / (local_step_size/local_primal_weight)
+                    reflected_primal_solution[LP, idx] = 2.0 * pdhg_primal_solution[LP, idx] - current_primal_solution[LP, idx]
+                    current_primal_solution[LP, idx] = weight * (reflection_coefficient * reflected_primal_solution[LP, idx] + 
+                                                        (1 - reflection_coefficient) * current_primal_solution[LP, idx]) + (1 - weight) * initial_primal_solution[LP, idx]
+                    idx += block_stride
+                end
+                idx = threadIdx().x
+
+                # Step 4) Loop over nonzeros to update current_primal_product, based on the reflected primal solution (A(2x(k+1)-xk)) [reflected]
+                while idx <= current_LP_length
+                    shared_space[idx] = 0.0
+                    idx += block_stride
+                end
+                idx = threadIdx().x
+                sync_threads()
+
+                while idx <= nz_count
+                    if active_constraint[active_row + nz_rows[idx]]
+                        CUDA.atomic_add!(CUDA.pointer(shared_space, nz_rows[idx]), scaled_constraint_matrix[active_row + nz_rows[idx], nz_cols[idx]] * reflected_primal_solution[LP, nz_cols[idx]])
+                    end
+                    idx += block_stride
+                end
+                idx = threadIdx().x
+
+                sync_threads()
+                while idx <= current_LP_length
+                    current_primal_product[active_row + idx] = shared_space[idx]
+                    idx += block_stride
+                end
+                idx = threadIdx().x
+
+
+                # Step 5) Compute the next dual solution
+                # if idx==1
+                #     scaled_right_hand_side[active_row + 1] = -0.500284
+                #     scaled_right_hand_side[active_row + 2] = 1.058611 
+                #     scaled_right_hand_side[active_row + 3] = -1.032256
+                #     scaled_right_hand_side[active_row + 4] = -2.526254
+                #     scaled_right_hand_side[active_row + 5] = -1.758950 
+                #     scaled_right_hand_side[active_row + 6] = -0.501680
+                # end
+
+                weight = ((inner_iterations + 1)/ (inner_iterations + 2))
+                while idx <= current_LP_length
+                    # pdhg_dual_solution[active_row + idx] = current_dual_solution[active_row + idx] + (local_primal_weight*local_step_size)*(
+                    #                     2*delta_primal_product[active_row + idx] - current_primal_product[active_row + idx] + 
+                    #                     max(scaled_right_hand_side[active_row + idx], (1/(local_primal_weight*local_step_size))*current_dual_solution[active_row + idx] -
+                    #                     (2*delta_primal_product[active_row + idx] - current_primal_product[active_row + idx])))
+                    
+                    temp = (current_dual_solution[active_row + idx] / (local_primal_weight*local_step_size) - current_primal_product[active_row + idx])
+                    pdhg_dual_solution[active_row + idx] = (temp - min(-scaled_right_hand_side[active_row + idx], temp)) * (local_primal_weight*local_step_size)
+                    # pdhg_dual_solution[active_row + idx] = (temp - max(0.0, temp)) * (local_primal_weight*local_step_size)
+                    reflected_dual_solution[active_row + idx] = 2.0 * pdhg_dual_solution[active_row + idx] - current_dual_solution[active_row + idx]
+                    current_dual_solution[active_row + idx] = weight * (reflection_coefficient * reflected_dual_solution[active_row + idx] + (1 - reflection_coefficient) * current_dual_solution[active_row + idx]) +
+                                                                (1.0 - weight) * initial_dual_solution[active_row + idx]
+                    idx += block_stride
+                end
+                idx = threadIdx().x
+
+                # idx==1 && CUDA.@cuprintln("PRIMAL THINGS AFTER TAKING STEP")
+                # idx==1 && CUDA.@cuprintln("current_dual_product: [$(current_dual_product[1,1]), $(current_dual_product[1,2])]")
+                # idx==1 && CUDA.@cuprintln("dual_slack: [$(dual_slack[1,1]), $(dual_slack[1,2])]")
+                # #idx==1 && CUDA.@cuprintln("Reflected_primal_solution: [$(reflected_primal_solution[1,1]), $(reflected_primal_solution[1,2])]")
+                # idx==1 && CUDA.@cuprintln("current_primal_solution: [$(current_primal_solution[1,1]), $(current_primal_solution[1,2])]")
+                # idx==1 && CUDA.@cuprintln("pdhg_primal_solution: [$(pdhg_primal_solution[1,1]), $(pdhg_primal_solution[1,2])]")
+
+                # idx==1 && CUDA.@cuprintln("\nSCALED CONSTRAINT MATRIX")
+                # idx==1 && CUDA.@cuprintln("scaled_constraint_matrix: [$(scaled_constraint_matrix[1,1]), $(scaled_constraint_matrix[1,2])]")
+                # idx==1 && CUDA.@cuprintln("scaled_constraint_matrix: [$(scaled_constraint_matrix[2,1]), $(scaled_constraint_matrix[2,2])]")
+                # idx==1 && CUDA.@cuprintln("scaled_constraint_matrix: [$(scaled_constraint_matrix[3,1]), $(scaled_constraint_matrix[3,2])]")
+                # idx==1 && CUDA.@cuprintln("scaled_constraint_matrix: [$(scaled_constraint_matrix[4,1]), $(scaled_constraint_matrix[4,2])]")
+                # idx==1 && CUDA.@cuprintln("scaled_constraint_matrix: [$(scaled_constraint_matrix[5,1]), $(scaled_constraint_matrix[5,2])]")
+                # idx==1 && CUDA.@cuprintln("scaled_constraint_matrix: [$(scaled_constraint_matrix[6,1]), $(scaled_constraint_matrix[6,2])]")
+                
+
+                # idx==1 && CUDA.@cuprintln("\nDUAL THINGS AFTER TAKING STEP")
+                # idx==1 && CUDA.@cuprintln("scaled_right_hand_side: [$(scaled_right_hand_side[1]), $(scaled_right_hand_side[2]), $(scaled_right_hand_side[3]), $(scaled_right_hand_side[4]), $(scaled_right_hand_side[5]), $(scaled_right_hand_side[6])]")
+                # idx==1 && CUDA.@cuprintln("current_primal_product: [$(current_primal_product[1]), $(current_primal_product[2]), $(current_primal_product[3]), $(current_primal_product[4]), $(current_primal_product[5]), $(current_primal_product[6])]")
+                # idx==1 && CUDA.@cuprintln("pdhg_dual_solution: [$(pdhg_dual_solution[1]), $(pdhg_dual_solution[2]), $(pdhg_dual_solution[3]), $(pdhg_dual_solution[4]), $(pdhg_dual_solution[5]), $(pdhg_dual_solution[6])]")
+                # #idx==1 && CUDA.@cuprintln("Reflected_dual_solution: [$(reflected_dual_solution[1]), $(reflected_dual_solution[2]), $(reflected_dual_solution[3]), $(reflected_dual_solution[4]), $(reflected_dual_solution[5]), $(reflected_dual_solution[6])]")
+                # idx==1 && CUDA.@cuprintln("current_dual_solution: [$(current_dual_solution[1]), $(current_dual_solution[2]), $(current_dual_solution[3]), $(current_dual_solution[4]), $(current_dual_solution[5]), $(current_dual_solution[6])] \n")
+                # error()
+
+                
+
+                sync_threads() 
+
+
+                if inner_iterations == Int32(0)
+
+                    # Compute Δx = reflected_primal - pdhg_primal, and ||Δx||²
                     while idx <= n_vars
-                        delta_primal[LP, idx] = min(scaled_variable_upper_bounds[LP, idx], max(scaled_variable_lower_bounds[LP, idx], current_primal_solution[LP, idx] - 
-                                                    (local_step_size/local_primal_weight) * (scaled_objective_vector[LP, idx] - current_dual_product[LP, idx]))) - 
-                                                    current_primal_solution[LP, idx]
-                        shared_space[idx] = delta_primal[LP, idx]^2
+                        delta_primal[LP, idx] = reflected_primal_solution[LP, idx] - pdhg_primal_solution[LP, idx]
+                        idx += block_stride
+                    end
+                    idx = threadIdx().x
+                    while idx <= n_vars 
+                        
+                        shared_space[idx] = delta_primal[LP, idx] ^ 2
                         idx += block_stride
                     end
                     idx = threadIdx().x
                     parallel_sum(shared_space, block_stride, var_stride, n_vars)
-                    if idx==1
-                        norm_delta_primal_sq = shared_space[1]
+                    if idx == 1
+                        anchor_squared_delta_primal = shared_space[1]
                     end
 
-                    # Step 3) Perform the following steps for each row in the current LP:
-                    # A) Update delta primal product using LP-segmented matrix-vector multiplication (size is (n_constraints,))
-                    #   (delta_primal_product[row] = sum(constraint_matrix[row, :] .* delta_primal[LP, :])
-                    # B) Update delta dual
-                    # C) Calculate the norm of delta_dual
-                    # D) Compute the interaction and movement terms
-
-                    # Reset delta_primal_product and the shared space
+                    # Compute Δy = reflected_dual - pdhg_dual, and ||Δy||²
                     while idx <= current_LP_length
-                        delta_primal_product[active_row + idx] = 0.0
+                        delta_dual[active_row + idx] = reflected_dual_solution[active_row + idx] - pdhg_dual_solution[active_row + idx]
+                        idx += block_stride
+                    end
+                    idx = threadIdx().x
+                    while idx <= current_LP_length
+                        shared_space[idx] = delta_dual[active_row + idx] ^ 2
+                        idx += block_stride
+                    end
+                    idx = threadIdx().x
+                    parallel_sum(shared_space, block_stride, len_stride, current_LP_length)
+                    if idx == 1
+                        anchor_squared_delta_dual = shared_space[1]
+                    end
+
+                    # Compute A^T Δy (store in shared_space, which has n_vars width)
+                    while idx <= n_vars
                         shared_space[idx] = 0.0
                         idx += block_stride
                     end
                     idx = threadIdx().x
                     sync_threads()
 
-                    # Loop over nonzeros to update delta_primal_product
                     while idx <= nz_count
                         if active_constraint[active_row + nz_rows[idx]]
-                            CUDA.atomic_add!(CUDA.pointer(shared_space, nz_rows[idx]), scaled_constraint_matrix[active_row + nz_rows[idx], nz_cols[idx]] * delta_primal[LP, nz_cols[idx]])
+                            CUDA.atomic_add!(CUDA.pointer(shared_space, nz_cols[idx]), scaled_constraint_matrix[active_row + nz_rows[idx], nz_cols[idx]] * delta_dual[active_row + nz_rows[idx]])
                         end
                         idx += block_stride
                     end
                     idx = threadIdx().x
                     sync_threads()
-                    while idx <= current_LP_length
-                        delta_primal_product[active_row + idx] += shared_space[idx]
+
+                    # Compute cross_term = dot(A^T Δy, Δx)
+                    while idx <= n_vars
+                        shared_space[idx] = shared_space[idx] * delta_primal[LP, idx]
                         idx += block_stride
                     end
                     idx = threadIdx().x
-
-                    # Compute other terms normally
-                    while idx <= current_LP_length
-                        delta_dual[active_row + idx] = max(0.0, (current_dual_solution[active_row + idx] + 
-                                            (local_primal_weight * local_step_size) * (scaled_right_hand_side[active_row + idx] -
-                                            ((Int32(1) + extrapolation_coefficient) * 
-                                            delta_primal_product[active_row + idx]) - 
-                                            (extrapolation_coefficient * current_primal_product[active_row + idx])))) - 
-                                            current_dual_solution[active_row + idx]
-                        shared_space[idx] = delta_primal_product[active_row + idx] * delta_dual[active_row + idx]
-                        idx += block_stride
-                    end
-                    idx = threadIdx().x
-                    parallel_sum(shared_space, block_stride, len_stride, current_LP_length)
-                    if idx==1
-                        interaction = abs(shared_space[1])
-                    end
-                    sync_threads()
-                    while idx <= current_LP_length
-                        shared_space[idx] = delta_dual[active_row + idx]^2
-                        idx += block_stride
-                    end
-                    idx = threadIdx().x
-                    parallel_sum(shared_space, block_stride, len_stride, current_LP_length)
-                    if idx==1
-                        norm_delta_dual_sq = shared_space[1]
-                        movement = 0.5 * local_primal_weight * norm_delta_primal_sq + (0.5 / local_primal_weight) * norm_delta_dual_sq
+                    parallel_sum(shared_space, block_stride, var_stride, n_vars)
+                    if idx == 1
+                        anchor_cross_term = shared_space[1]
                     end
 
-                    # Step 4) Update the step size limit, and check for numerical errors
-                    if idx==1
-                        if interaction > 0.0
-                            step_size_limit[1] = movement/interaction
-                            if iszero(movement)
-                                numerical_error[1] = true
-                            end
-                        else
-                            step_size_limit[1] = Inf
+                    if unsafe_load(CUDA.pointer(do_restart, 1)) == true 
+                        if idx == 1
+                            # initial_fixed_error = sqrt((local_primal_weight / local_step_size) * anchor_squared_delta_primal + (1 / (local_step_size * local_primal_weight)) * anchor_squared_delta_dual + 2 * local_step_size * anchor_cross_term)
+                            initial_fixed_error = sqrt((local_primal_weight) * anchor_squared_delta_primal + (1 / (local_primal_weight)) * anchor_squared_delta_dual + 2 * local_step_size * anchor_cross_term)
+                            # CUDA.@cuprintln("POST RESTART -> initial fixed point error set to = $initial_fixed_error \n")
+                            do_restart[1] = false
                         end
                     end
-                    
-                    # Step 5) Update the solution (if we're done)
-                    sync_threads()
-                    if local_step_size <= unsafe_load(CUDA.pointer(step_size_limit, 1))
-                        done = true # This will be the final iteration of this step
-                        while idx <= n_vars
-                            current_primal_solution[LP, idx] += delta_primal[LP, idx]
-                            idx += block_stride
-                        end
-                        idx = threadIdx().x
-                        while idx <= current_LP_length
-                            current_primal_product[active_row + idx] += delta_primal_product[active_row + idx]
-                            current_dual_solution[active_row + idx] += delta_dual[active_row + idx]
-                            idx += block_stride
-                        end
-                        idx = threadIdx().x
-
-                        # Reset current_dual_product and the shared space
-                        while idx <= n_vars
-                            current_dual_product[LP, idx] = 0.0
-                            shared_space[idx] = 0.0
-                            idx += block_stride
-                        end
-                        idx = threadIdx().x
-                        sync_threads()
-
-                        # Loop over nonzeros to update current_dual_product
-                        while idx <= nz_count
-                            if active_constraint[active_row + nz_rows[idx]]
-                                CUDA.atomic_add!(CUDA.pointer(shared_space, nz_cols[idx]), scaled_constraint_matrix[active_row + nz_rows[idx], nz_cols[idx]] * current_dual_solution[active_row + nz_rows[idx]])
-                            end
-                            idx += block_stride
-                        end
-                        idx = threadIdx().x
-                        sync_threads()
-                        while idx <= n_vars
-                            current_dual_product[LP, idx] += shared_space[idx]
-                            idx += block_stride
-                        end
-                        idx = threadIdx().x
-                        sync_threads()
-                        
-                        # Also update solution weighted average
-                        while idx <= n_vars
-                            sum_primal_solutions[LP, idx] += current_primal_solution[LP, idx] * local_step_size
-                            sum_dual_product[LP, idx] += current_dual_product[LP, idx] * local_step_size
-                            idx += block_stride
-                        end
-                        idx = threadIdx().x
-                        sum_primal_solutions_count += Int32(1)
-                        sum_primal_solution_weights += local_step_size
-                        while idx <= current_LP_length
-                            sum_primal_product[active_row + idx] += current_primal_product[active_row + idx] * local_step_size
-                            sum_dual_solutions[active_row + idx] += current_dual_solution[active_row + idx] * local_step_size
-                            idx += block_stride
-                        end
-                        idx = threadIdx().x
-                        sum_dual_solutions_count += Int32(1)
-                        sum_dual_solution_weights += local_step_size
-                    end
-
-
-                    if idx==1
-                        step_size[1] = min(((1.0 - 1.0/(step_iterations + 1.0)^reduction_exponent)) * step_size_limit[1],
-                                            ((1.0 + 1.0/(step_iterations + 1.0)^growth_exponent)) * step_size[1])
-                    end
-                    sync_threads()
                 end
 
+                inner_iterations += Int32(1)
                 step += Int32(1)
+                sync_threads() 
             end
             iteration += n_steps
         end
-    end
-    return nothing
-end
-
-# A quick function to calculate a parallel sum over the first max_len elements in the shared space
-function parallel_sum(shared, block_stride, reduction_stride, maxlen)
-    sync_threads()
-    idx = threadIdx().x
-    while reduction_stride > 0
-        while idx <= reduction_stride && idx + reduction_stride <= maxlen
-            shared[idx] += shared[idx + reduction_stride]
-            idx += block_stride
-        end
-        idx = threadIdx().x
-        sync_threads()
-        reduction_stride >>>= 1
-    end
-    return nothing
-end
-
-# A quick function to calculate a parallel max over the first max_len elements in the shared space
-function parallel_max(shared, block_stride, reduction_stride, maxlen)
-    sync_threads()
-    idx = threadIdx().x
-    while reduction_stride > 0
-        while idx <= reduction_stride && idx + reduction_stride <= maxlen
-            shared[idx] = max(shared[idx], shared[idx + reduction_stride])
-            idx += block_stride
-        end
-        idx = threadIdx().x
-        sync_threads()
-        reduction_stride >>>= 1
     end
     return nothing
 end

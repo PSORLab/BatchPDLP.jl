@@ -2,13 +2,13 @@
 # Rescaling and update functions called from `primal_subroutines.jl`. These
 # are generally based on cuPDLP.jl.
 function ruiz_rescaling(
-    problem::LinearProgramSet, 
+    problem::LinearProgramSet, # problem that is being fed here is original problem technically
     n_iterations::Int, 
     variable_rescaling::CuArray{Float64}, 
     constraint_rescaling::CuArray{Float64},  
     dims::PDLPDims,
     )
-
+    
     # Identify the number of blocks to use
     GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
 
@@ -16,24 +16,24 @@ function ruiz_rescaling(
     temp_variable_rescaling = CuArray{Float64}(undef, size(variable_rescaling))
     temp_constraint_rescaling = CuArray{Float64}(undef, size(constraint_rescaling))
 
-    for _ in 1:n_iterations
+    for j in 1:n_iterations
         # Variable rescaling. sqrt of the maximum value of each column in each LP
         CUDA.@sync @cuda blocks=GPU_blocks threads=512 ruiz_variable_kernel(
             temp_variable_rescaling, 
             problem.constraint_matrix, 
             dims.current_LP_length, 
             dims.total_LP_length
-            )
-
+            )        
         # Constraint resscaling. sqrt of the maximum value of each row of the constraint matrix
         CUDA.@sync @cuda blocks=GPU_blocks threads=512 ruiz_constraint_kernel(
-            temp_constraint_rescaling, 
-            problem.constraint_matrix, 
-            dims.current_LP_length, 
-            dims.total_LP_length
+            temp_constraint_rescaling, # result_storage
+            problem.constraint_matrix, # constraint_matrix
+            dims.current_LP_length, # current_LP_length
+            dims.total_LP_length # total_LP_length
             )
-
-        # Use the variable and constraint rescaling values to scale the problem
+            
+        
+        # Use the temp variable and constraint rescaling values to scale the problem
         scale_problem(
             problem, 
             temp_variable_rescaling, 
@@ -44,6 +44,8 @@ function ruiz_rescaling(
         # Update the overall rescaling variables
         variable_rescaling .*= temp_variable_rescaling
         constraint_rescaling .*= temp_constraint_rescaling
+
+        
     end
 
     # Free up temporary variables
@@ -53,7 +55,7 @@ function ruiz_rescaling(
 end
 
 function pock_chambolle_rescaling(
-    problem::LinearProgramSet, 
+    problem::LinearProgramSet, # the scaled problem from ruiz method is fed here
     alpha::Float64, 
     variable_rescaling::CuArray{Float64}, 
     constraint_rescaling::CuArray{Float64},  
@@ -90,6 +92,8 @@ function pock_chambolle_rescaling(
         temp_constraint_rescaling,  
         dims
         )
+
+    
 
     # Update the overall rescaling variables
     variable_rescaling .*= temp_variable_rescaling
@@ -144,22 +148,35 @@ end
 function select_initial_primal_weight(
     primal_weight::CuArray{Float64},
     problem::LinearProgramSet,
-    dims::PDLPDims
+    dims::PDLPDims,
+    version::Symbol
     )
     # Theoretically the primal importance can change, but the default in the MOI_wrapper
     # is to set it to 1.0. The other parameters are un-settable in cuPDLP but theoretically
     # could be changed as well
     GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
-    CUDA.@sync @cuda blocks=GPU_blocks threads=512 primal_weight_kernel(
-        primal_weight, 
-        problem.objective_vector, 
-        problem.right_hand_side, 
-        dims.n_LPs, 
-        dims.total_LP_length, 
-        dims.current_LP_length
-        )
+    if version == :original
+        CUDA.@sync @cuda blocks=GPU_blocks threads=512 primal_weight_kernel(
+            primal_weight, 
+            problem.objective_vector, 
+            problem.right_hand_side, 
+            dims.n_LPs, 
+            dims.total_LP_length, 
+            dims.current_LP_length
+            )
+    elseif version == :rHalpern 
+        CUDA.@sync @cuda blocks=GPU_blocks threads=512 primal_weight_kernel_rHalpern(
+            primal_weight, 
+            problem.objective_vector, 
+            problem.right_hand_side, 
+            dims.n_LPs, 
+            dims.total_LP_length, 
+            dims.current_LP_length
+            )
+    end
     return nothing
 end
+
 
 function update_step_size(problem::LinearProgramSet, step_size::CuArray{Float64}, dims::PDLPDims)
     GPU_blocks = Int32(CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT))
@@ -478,4 +495,43 @@ function add_multiple_LP_lower_bound(
     return nothing
 end
 
+
+function update_constant_step_size(problem::LinearProgramSet, 
+    step_size::CuArray{Float64}, 
+    eigenvector_d::CuArray{Float64}, 
+    next_eigenvector_d::CuArray{Float64}, 
+    u_vec::CuArray{Float64},
+    nz_counts::Int,
+    nz_rows::CuArray{Int32},
+    nz_cols::CuArray{Int32},
+    active_constraint::CuArray{Bool},
+    dims::PDLPDims)
+
+    n_vars = dims.n_vars
+    max_value = max(dims.current_LP_length, n_vars)
+    shmem_bytes = max_value * sizeof(Float64) 
+
+    threads_per_block = 256 
+    iterations = Int32(5000)     
+
+    CUDA.@sync @cuda blocks=dims.n_LPs threads=threads_per_block shmem=shmem_bytes group_power_kernel(
+        step_size, 
+        problem.constraint_matrix, 
+        dims.n_LPs, 
+        dims.n_vars,
+        nz_counts,
+        nz_rows,
+        nz_cols,
+        active_constraint,
+        dims.total_LP_length, 
+        dims.current_LP_length,
+        u_vec,  
+        eigenvector_d,  
+        next_eigenvector_d,    
+        iterations,
+        1e-4,
+    )
+
+    return nothing
+end
 

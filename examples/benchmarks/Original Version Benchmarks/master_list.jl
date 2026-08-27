@@ -257,7 +257,7 @@ included = original_included[(!).(in.(original_included[:,1], Ref(exclude_list))
 
 for i in included[:,1]
     try
-        include("./all_examples/$i.jl")
+        include("./exampels/all_examples/$i.jl")
     catch
         println("$i failed")
     end

@@ -5,7 +5,7 @@ using BatchPDLP, SourceCodeMcCormick, CUDA, JuMP, GLPK, Gurobi, HiGHS, Dates, Ra
 const GRB_ENV = Gurobi.Env()
 
 # Include all files from the master list
-include("master_list.jl")
+include("./examples/benchmarks/Original Version Benchmarks/master_list.jl")
 
 # Using the number of problems and the dimensionality, create a partition of the 
 # space of the original problem
@@ -239,7 +239,7 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_BatchP
     # Solve the problems once for compilation
     if run_BatchPDLP
         try
-            PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, return_both_obj=true)
+            PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, version=:original, return_both_obj=true)
         catch
             nothing
         end
@@ -268,7 +268,7 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_BatchP
         end
         PDLP_data.parameters.iteration_limit = Int32(stop_here)
         try
-            PDLP_95pct_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, return_both_obj=true)
+            PDLP_95pct_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, version=:original, return_both_obj=true)
         catch
             PDLP_95pct_solving_time[1] = NaN
         end
@@ -287,7 +287,7 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_BatchP
     # Run PDLP with an iteration limit of 1E6 and tolerances of 1E-8
     if run_BatchPDLP
         try
-            PDLP_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, return_both_obj=true)
+            PDLP_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_solutions, objectives=PDLP_objectives, version=:original, return_both_obj=true)
         catch
             PDLP_solving_time[1] = NaN
         end
@@ -308,7 +308,7 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_BatchP
     # Solve again with lower tolerances
     if run_BatchPDLP
         try
-            PDLP_lowres_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_lowres_solutions, objectives=PDLP_lowres_objectives, return_both_obj=true)
+            PDLP_lowres_solving_time[1] = @elapsed PDLP(PDLP_data, solutions=PDLP_lowres_solutions, objectives=PDLP_lowres_objectives, version=:original, return_both_obj=true)
         catch
             PDLP_lowres_solving_time[1] = NaN
         end
@@ -393,11 +393,11 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_BatchP
             @sync begin
                 @async begin
                     device!(0)
-                    PDLP(PDLP_data_A, solutions=PDLP_A_solutions, objectives=PDLP_A_objectives, return_both_obj=true)
+                    PDLP(PDLP_data_A, solutions=PDLP_A_solutions, objectives=PDLP_A_objectives, version=:original, return_both_obj=true)
                 end
                 @async begin
                     device!(1)
-                    PDLP(PDLP_data_B, solutions=PDLP_B_solutions, objectives=PDLP_B_objectives, return_both_obj=true)
+                    PDLP(PDLP_data_B, solutions=PDLP_B_solutions, objectives=PDLP_B_objectives, version=:original, return_both_obj=true)
                 end
             end
         catch
@@ -411,11 +411,11 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_BatchP
             @sync begin
                 @async begin
                     device!(0)
-                    PDLP(PDLP_data_A, solutions=PDLP_A_solutions, objectives=PDLP_A_objectives, return_both_obj=true)
+                    PDLP(PDLP_data_A, solutions=PDLP_A_solutions, objectives=PDLP_A_objectives, version=:original, return_both_obj=true)
                 end
                 @async begin
                     device!(1)
-                    PDLP(PDLP_data_B, solutions=PDLP_B_solutions, objectives=PDLP_B_objectives, return_both_obj=true)
+                    PDLP(PDLP_data_B, solutions=PDLP_B_solutions, objectives=PDLP_B_objectives, version=:original, return_both_obj=true)
                 end
             end
         end
@@ -432,11 +432,11 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_BatchP
                 @sync begin
                     @async begin
                         device!(0)
-                        PDLP(PDLP_data_A, solutions=PDLP_A_solutions, objectives=PDLP_A_objectives, return_both_obj=true)
+                        PDLP(PDLP_data_A, solutions=PDLP_A_solutions, objectives=PDLP_A_objectives, version=:original, return_both_obj=true)
                     end
                     @async begin
                         device!(1)
-                        PDLP(PDLP_data_B, solutions=PDLP_B_solutions, objectives=PDLP_B_objectives, return_both_obj=true)
+                        PDLP(PDLP_data_B, solutions=PDLP_B_solutions, objectives=PDLP_B_objectives, version=:original, return_both_obj=true)
                     end
                 end
             end
@@ -464,11 +464,11 @@ function run_example(example::LoadedProblem, n_LPs::Int, n_cuts::Int; run_BatchP
                 @sync begin
                     @async begin
                         device!(0)
-                        PDLP(PDLP_data_A, solutions=PDLP_A_lowres_solutions, objectives=PDLP_A_lowres_objectives, return_both_obj=true)
+                        PDLP(PDLP_data_A, solutions=PDLP_A_lowres_solutions, objectives=PDLP_A_lowres_objectives, version=:original, return_both_obj=true)
                     end
                     @async begin
                         device!(1)
-                        PDLP(PDLP_data_B, solutions=PDLP_B_lowres_solutions, objectives=PDLP_B_lowres_objectives, return_both_obj=true)
+                        PDLP(PDLP_data_B, solutions=PDLP_B_lowres_solutions, objectives=PDLP_B_lowres_objectives, version=:original, return_both_obj=true)
                     end
                 end
             end
@@ -892,7 +892,7 @@ for i = 1:size(included, 1)
     end
 
     # Write data to a CSV
-    open("./benchmarking_results/rundata_$(included[i,1]).csv", "w") do io
+    open("./examples/benchmarks/benchmarking_results/rundata_$(included[i,1]).csv", "w") do io
         CSV.write(io, Tables.table(data), header=[
                 "BatchPDLP (1xGPU) Hi-Res - Term Status",
                 "BatchPDLP (1xGPU) Hi-Res - Iterations",

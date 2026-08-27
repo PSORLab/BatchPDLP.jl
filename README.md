@@ -1,13 +1,13 @@
 # BatchPDLP.jl
 
-This package applies the PDLP algorithm [[1](#references)] to solve batches of small, structurally similar linear programs (LPs) simultaneously using NVIDIA GPU resources through CUDA.jl [[2](#references)]. It assumes that LPs are provided (or can be generated) in GPU memory, and only stores solution information in GPU memory. I.e., this package does not manage the transfer of LP information to or from the CPU. `BatchPDLP.jl` is meant to be used within a global optimizer such as `EAGO.jl` [[3](#references)] to solve large numbers of LPs of sizes typically seen within global optimization. `BatchPDLP.jl` was tested on batches of LPs with up to roughly 100 variables and 1000 constraints each.
+This package includes and applies both the standard and the improved PDLP algorithms [[1](#references)] to solve batches of small, structurally similar linear programs (LPs) simultaneously using NVIDIA GPU resources through CUDA.jl [[2](#references)]. The standard version is based on the original PDLP algorithm which can be called using the version key `:original`. The improved version is based on the restarted Halpern reflection scheme [[3](#references)], which is an improvement on the original PDLP algorithm, and can be called using the version key `:rHalpern`. `BatchPDLP.jl` assumes that LPs are provided (or can be generated) in GPU memory, and only stores solution information in GPU memory. I.e., this package does not manage the transfer of LP information to or from the CPU. `BatchPDLP.jl` is meant to be used within a global optimizer such as `EAGO.jl` [[4](#references)] to solve large numbers of LPs of sizes typically seen within global optimization. `BatchPDLP.jl` was tested on batches of LPs with up to roughly 100 variables and 1000 constraints each.
 
 
 ## Usage Note
 
-`BatchPDLP.jl` is primarily designed to work with `SourceCodeMcCormick.jl` [[4](#references)], which calculates McCormick relaxations and their subgradients for factorable expressions. These relaxations and their subgradients can then be converted into LP constraints through `BatchPDLP.jl`, after which the PDLP algorithm can be run. Internally, `BatchPDLP.jl` works by launching a kernel with the number of blocks set equal to the number of LPs being solved, meaning the number of LPs per batch should generally be larger than the number of streaming multiprocessors (SMs) in the GPU. 
+`BatchPDLP.jl` is primarily designed to work with `SourceCodeMcCormick.jl` [[5](#references)], which calculates McCormick relaxations and their subgradients for factorable expressions. These relaxations and their subgradients can then be converted into LP constraints through `BatchPDLP.jl`, after which the PDLP algorithm can be run. Internally, `BatchPDLP.jl` works by launching a kernel with the number of blocks set equal to the number of LPs being solved, meaning the number of LPs per batch should generally be larger than the number of streaming multiprocessors (SMs) in the GPU. 
 
-More specifically, `BatchPDLP.jl` is not meant to handle single LP instances. It is explicitly not designed to handle the typical "large" LPs seen in, e.g., LP benchmark test sets, which makes it distinct from many other GPU-accelerated LP solvers such as `cuPDLP.jl` [[5](#references)]. `BatchPDLP.jl` is only meant to be performant when solving hundreds, thousands, or tens of thousands of structurally similar LPs.
+More specifically, `BatchPDLP.jl` is not meant to handle single LP instances. It is explicitly not designed to handle the typical "large" LPs seen in, e.g., LP benchmark test sets, which makes it distinct from many other GPU-accelerated LP solvers such as `cuPDLP.jl` and `cuPDLPx`[[6](#references), [7](#references)]. `BatchPDLP.jl` is only meant to be performant when solving hundreds, thousands, or tens of thousands of structurally similar LPs.
 
 ## Basic Functionality
 
@@ -66,7 +66,7 @@ PDLPData.parameters.termination_criteria.eps_primal_infeasible = 1E-7
 PDLPData.parameters.termination_criteria.eps_dual_infeasible = 1E-7
 ```
 
-There are several functions built into `lower_level_subroutines.jl` and `kernels.jl` that can be used to add constraints to the necessary fields in `PDLPData`, although they are written specifically to interact with `SourceCodeMcCormick.jl` and the `ParBB` extension of EAGO. An example of how some of these functions are meant to be used is included in the `./benchmarks` folder, along with the script that was run to generate benchmark results for the paper. Generally, if a constraint is to be added to each LP, the following actions should be taken:
+There are several functions built into `lower_level_subroutines.jl` and `kernels.jl` that can be used to add constraints to the necessary fields in `PDLPData`, although they are written specifically to interact with `SourceCodeMcCormick.jl` and the `ParBB` extension of `EAGO.jl` An example of how some of these functions are meant to be used is included in the `./examples/benchmarks` folder, along with the script that was run to generate benchmark results for the paper. Generally, if a constraint is to be added to each LP, the following actions should be taken:
 
 1) Ensure that the LP constraint to be added is in `>=` form, with only a constant on the right-hand side.
 2) Add variable coefficients for this constraint to the `PDLPData.original_problem.constraint_matrix` field, in the line `PDLPData.dims.current_LP_length + 1` for each LP. Note that `PDLPData.dims.current_LP_length + 1` should not exceed `PDLPData.dims.total_LP_length`, or else data will spill into the constraint space designated for the following LP(s). 
@@ -74,7 +74,7 @@ There are several functions built into `lower_level_subroutines.jl` and `kernels
 4) Change `PDLPData.active_constraint` at the index `PDLPData.dims.current_LP_length + 1` to `true`, for each LP where a constraint was added.
 5) Set `PDLPData.current_LP_length` equal to `PDLPData.current_LP_length + 1`.
 
-Once all necessary constraints have been added, the LPs can be solved by calling the `PDLP` function with the `PDLPData` struct as an argument. Storage for the LP solutions (with a size of (`PDLPData.dims.n_LPs`, `PDLPData.dims.n_vars`)) and objective values (with a size of (`PDLPData.dims.n_LPs`)) are provided as arguments, though are not technically required. The global upper bound used in a global optimization routine may also be provided as an argument, which will cause `BatchPDLP.jl` to terminate individual LPs if dual feasible solutions are found with dual objective values greater than the global upper bound (with termination code `TERMINATION_REASON_GLOBAL_UPPER_BOUND_HIT`). The call to `PDLP` may look like the following:
+Once all necessary constraints have been added, the LPs can be solved by calling the `PDLP` function with the `PDLPData` struct as an argument. Storage for the LP solutions (with a size of (`PDLPData.dims.n_LPs`, `PDLPData.dims.n_vars`)) and objective values (with a size of (`PDLPData.dims.n_LPs`)) are provided as arguments, though are not technically required. Also, the intended version (either `:rHalpern` or `:original`) can be passed as an argument, where the default is `:rHalpern`. The global upper bound used in a global optimization routine may also be provided as an argument, which will cause `BatchPDLP.jl` to terminate individual LPs if dual feasible solutions are found with dual objective values greater than the global upper bound (with termination code `TERMINATION_REASON_GLOBAL_UPPER_BOUND_HIT`). The call to `PDLP` may look like the following:
 ```julia
 using BatchPDLP, CUDA
 
@@ -91,8 +91,9 @@ upper_bound = 0.0
 
 # Run PDLP
 PDLP(PDLP_data,
-     solutions=PDLP_solutions
+     solutions=PDLP_solutions,
      objectives=dual_objectives,
+     version = :rHalpern,
      global_upper_bound=upper_bound)
 ```
 
@@ -123,6 +124,8 @@ A BibTeX entry is given below:
 ## References
 1. Applegate, D., Díaz, M., Hinder, O., Lu, H., Lubin, M., O’Donoghue, B., Schudy, W.: Practical large-scale linear programming using primal-dual hybrid gradient (2021) https://doi.org/10.48550/ARXIV.2106.04756 arXiv:2106.04756 [math.OC]
 2. Besard, T., Foket, C., and De Sutter, B. Effective Extensible Programming: Unleashing Julia on GPUs. IEEE Transactions on Parallel and Distributed Systems (2018). https://doi.org/10.1109/TPDS.2018.2872064
-3. Wilhelm, M.E., Stuber, M.D.: EAGO.jl: easy advanced global optimization in Julia. Optimization Methods and Software 37(2), 425–450 (2022) https://doi.org/10.1080/10556788.2020.1786566
-4. Gottlieb, R.X., Stuber, M.D.: Automatic generation of GPU kernels for evaluators of McCormick-based relaxations and subgradients. Under Revision (2025)
-5. Lu, H., Yang, J.: cuPDLP.jl: A GPU implementation of restarted primal-dual hybrid gradient for linear programming in Julia (2024) https://doi.org/10.48550/ARXIV.2311.12180 arXiv:2311.12180 [math.OC]
+3. Lu, H., Yang, J.: Restarted Halpern PDHG for Linear Programming (2024) https://doi.org/10.48550/arXiv.2407.16144 arXiv:2407.16144 [math.OC]
+4. Wilhelm, M.E., Stuber, M.D.: EAGO.jl: easy advanced global optimization in Julia. Optimization Methods and Software 37(2), 425–450 (2022) https://doi.org/10.1080/10556788.2020.1786566
+5. Gottlieb, R.X., Stuber, M.D.: Automatic generation of GPU kernels for evaluators of McCormick-based relaxations and subgradients. Under Revision (2025)
+6. Lu, H., Yang, J.: cuPDLP.jl: A GPU implementation of restarted primal-dual hybrid gradient for linear programming in Julia (2024) https://doi.org/10.48550/ARXIV.2311.12180 arXiv:2311.12180 [math.OC]
+7. Lu, H., Peng, Z., Yang, J.: cuPDLPx: A Further Enhanced GPU-Based First-Order Solver for Linear Programming (2025) https://doi.org/10.48550/arXiv.2507.14051 arXiv:2507.14051 [math.OC]

@@ -523,7 +523,7 @@ function ruiz_variable_kernel(
         end
 
         # Set the value to 1.0 if the maximum was zero.
-        if iszero(maxval)
+        if maxval < 1e-12
             maxval = 1.0
         end
 
@@ -543,8 +543,8 @@ function ruiz_constraint_kernel(
 
     idx = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
     stride = blockDim().x * gridDim().x
-    len = Int32(size(constraint_matrix, 1))
-    width = Int32(size(constraint_matrix, 2))
+    len = Int32(size(constraint_matrix, 1)) # number of constraints
+    width = Int32(size(constraint_matrix, 2)) # number of variables
 
     # For each row of the constraint matrix, get the maximum value of the absolute 
     # values of the elements in that row, and set the result storage to the sqrt of 
@@ -562,7 +562,7 @@ function ruiz_constraint_kernel(
             maxval = max(abs(constraint_matrix[new_ID, col]), maxval)
             col += Int32(1)
         end
-        if iszero(maxval)
+        if maxval < 1e-12
             maxval = 1.0
         end
         result_storage[new_ID] = sqrt(maxval)
@@ -673,7 +673,7 @@ function pock_chambolle_variable_kernel(
         end
 
         # Set the value to 1.0 if the result was zero.
-        if iszero(result)
+        if result < 1e-12
             result = 1.0
         end
 
@@ -712,7 +712,7 @@ function pock_chambolle_constraint_kernel(
             result += abs(constraint_matrix[new_ID, col])^alpha
             col += Int32(1)
         end
-        if iszero(result)
+        if result < 1e-12
             result = 1.0
         end
         result_storage[new_ID] = sqrt(result)
@@ -723,7 +723,7 @@ end
 
 # This kernel calculates the initial primal weight by taking the norm of the objective
 # vector and the right-hand side, for each LP, and using their ratio to set the
-# primal weight
+# primal weight as cupdlp.jl does
 function primal_weight_kernel(
     result, 
     objective_vector, 
@@ -765,6 +765,52 @@ function primal_weight_kernel(
     return nothing
 end
 
+# This kernel calculates the initial primal weight by taking the norm of the objective
+# vector and the right-hand side, for each LP, and using their ratio to set the
+# primal weight as cupdlpx does
+function primal_weight_kernel_rHalpern(
+    result, 
+    objective_vector, 
+    right_hand_side, 
+    n_groups, 
+    group_length, 
+    current_length
+    )
+
+    idx = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
+    stride = blockDim().x * gridDim().x
+    width = Int32(size(objective_vector, 2))
+
+    while idx <= n_groups
+        # Calculate the objective norm first
+        obj_norm = 0.0
+        col_or_row = Int32(1)
+        while col_or_row <= width
+            obj_norm += objective_vector[idx,col_or_row]^2
+            col_or_row += Int32(1)
+        end
+
+        # Then calculate the right-hand side norm
+        rhs_norm = 0.0
+        col_or_row = Int32(1)
+        while col_or_row <= current_length
+            rhs_norm += right_hand_side[(idx - Int32(1))*group_length + col_or_row]^2
+            col_or_row += Int32(1)
+        end
+
+        # And finally, calculate the primal importance and save it to the result
+        if obj_norm > 0.0 && rhs_norm > 0.0
+            # result[idx] = sqrt(obj_norm)/sqrt(rhs_norm)
+            result[idx] = (sqrt(obj_norm) + 1) / (sqrt(rhs_norm) + 1)
+        else
+            result[idx] = 1.0
+        end
+        
+        idx += stride
+    end
+    return nothing
+end
+
 # This function finds 1/norm(matrix, Inf) by scanning each row up to current_length
 # in each LP for the maximum.
 function group_max_kernel(
@@ -795,4 +841,204 @@ function group_max_kernel(
         idx += stride
     end
     return nothing
+end
+
+# this kernel function is for doing power iterations to estimate ||G||_2. 
+function group_power_kernel(
+    result, # [n_LPs] - output step sizes
+    matrix, 
+    n_LPs, 
+    n_vars,
+    nz_count,
+    nz_rows,
+    nz_cols,
+    active_constraint,
+    total_LP_length, 
+    current_LP_length,
+    u_vec, # [n_LPs, n_vars] - intermediate: A·v
+    eigenvector_d, # [n_LPs * total_LP_length] - current eigenvector
+    new_eigenvector_d, # [n_LPs * total_LP_length] - next eigenvector (A·A^T·v)
+    iterations,
+    tolerance
+    )
+
+    LP = blockIdx().x
+    idx = threadIdx().x
+
+    block_stride = blockDim().x
+    grid_stride = gridDim().x
+
+    shared_space = @cuDynamicSharedMem(Float64, max(current_LP_length, n_vars))
+
+
+    var_stride = Int32(1) << floor(Int32, log2(n_vars))
+    len_stride = Int32(1) << floor(Int32, log2(current_LP_length))
+
+    while LP <= n_LPs
+        
+        # LP-specific starting position in the 1D workspace array (1-based)
+        active_row = (LP - Int32(1)) * total_LP_length
+
+        iter = Int32(1)
+        sigma_max_sq = 1.0
+        
+        # Power iterations
+        while iter <= iterations 
+
+            #########################################################
+            # STEP 1: Copy and normalize guess_vector to new_vector #
+            #########################################################
+            # Copy eigenvector_d into new_eigenvector_d
+            while idx <= current_LP_length
+                new_eigenvector_d[active_row + idx] = eigenvector_d[active_row + idx]
+                idx += block_stride
+            end
+            idx = threadIdx().x
+            sync_threads()
+
+            # Compute L2 norm of new_eigenvector_d: ||new_eigenvector_d||_2
+
+            while idx <= current_LP_length
+                shared_space[idx] = new_eigenvector_d[active_row + idx] ^ 2
+                idx += block_stride
+            end
+            idx = threadIdx().x
+            parallel_sum(shared_space, block_stride, len_stride, current_LP_length)
+            
+            eigenvector_norm = sqrt(shared_space[1])
+            inv_eigenvector_norm = 1 / eigenvector_norm
+            # Normalize: new_vector = new_vector / ||new_vector||_2
+
+            while idx <= current_LP_length
+                new_eigenvector_d[active_row + idx] =  new_eigenvector_d[active_row + idx] * inv_eigenvector_norm
+                idx += block_stride
+            end
+
+            idx = threadIdx().x
+            sync_threads()
+
+            ##############################################################################
+            # STEP 2: Compute u_vec = A^T * new_eigenvector_d ([n*1] = [n*m] x [m*1])    #
+            ##############################################################################
+
+            while idx <= n_vars 
+                shared_space[idx] = 0.0
+                idx += block_stride
+            end
+            idx = threadIdx().x
+            while idx <= nz_count
+                if active_constraint[active_row + nz_rows[idx]]
+                    CUDA.atomic_add!(CUDA.pointer(shared_space, nz_cols[idx]), matrix[active_row + nz_rows[idx], nz_cols[idx]] * new_eigenvector_d[active_row + nz_rows[idx]])
+                end
+                idx += block_stride
+            end
+            idx = threadIdx().x
+            sync_threads()
+
+            while idx <= n_vars
+                u_vec[LP, idx] = shared_space[idx]
+                idx += block_stride
+            end
+            idx = threadIdx().x
+            sync_threads()
+
+            ################################################################################
+            # STEP 3: Compute eigenvector_d = A * u_vec ([m*1] = [m*n] x [n*1])            #
+            ################################################################################
+
+            while idx <= current_LP_length 
+                shared_space[idx] = 0.0
+                idx += block_stride
+            end
+            idx = threadIdx().x
+            while idx <= nz_count
+                if active_constraint[active_row + nz_rows[idx]]
+                    CUDA.atomic_add!(CUDA.pointer(shared_space, nz_rows[idx]), matrix[active_row + nz_rows[idx], nz_cols[idx]] * u_vec[LP, nz_cols[idx]])
+                end
+                idx += block_stride
+            end
+            idx = threadIdx().x
+            sync_threads()
+
+            while idx <= current_LP_length
+                eigenvector_d[active_row + idx] = shared_space[idx]
+                idx += block_stride
+            end
+            
+            idx = threadIdx().x
+            sync_threads()
+
+            #########################################################
+            # STEP 4: Compute Rayleigh quotient                     #
+            # sigma_max_sq = guess_vector * next_vector             #
+            #########################################################
+
+            while idx <= current_LP_length
+                shared_space[idx] = new_eigenvector_d[active_row + idx] * eigenvector_d[active_row + idx]
+                idx += block_stride
+            end
+            idx = threadIdx().x
+            parallel_sum(shared_space, block_stride, len_stride, current_LP_length)
+            
+            sigma_max_sq = shared_space[1]
+            sync_threads()
+
+            #########################################################
+            # STEP 5: Compute residual for convergence check        #
+            # residual = guess_vector - sigma_max_sq * new_vector   #
+            #########################################################
+
+            while idx <= current_LP_length
+                shared_space[idx] = (eigenvector_d[active_row + idx] - sigma_max_sq * new_eigenvector_d[active_row + idx]) ^ 2
+                idx += block_stride
+            end
+            idx = threadIdx().x
+            parallel_sum(shared_space, block_stride, len_stride, current_LP_length)
+            sync_threads()
+
+            residual_norm = sqrt(shared_space[1])
+
+            # Check convergence
+            if residual_norm < tolerance
+                break
+            end
+
+            iter += Int32(1)
+        end
+        
+        # Compute step size: tau = 0.998 / sqrt(sigma_max_sq)
+        if idx == 1
+            result[LP] = 0.998 / sqrt(sigma_max_sq)
+            
+        end
+        LP += grid_stride
+    end
+    return nothing
+end
+
+function compute_bound_contrib_kernel(
+    results,
+    right_hand_side,
+    total_LP_length,
+)
+
+    idx = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
+    stride = blockDim().x * gridDim().x
+
+    while idx <= total_LP_length
+        Li = right_hand_side[idx]
+        acc = 0.0 
+        
+        # Since there are no upper bounds, we only check if the lower bound (RHS) is finite.
+        if isfinite(Li)
+            acc += Li * Li
+        end
+        
+        results[idx] = acc
+        
+        # CRITICAL: Advance the index to prevent an infinite loop
+        idx += stride
+    end
+    
+    return nothing 
 end
